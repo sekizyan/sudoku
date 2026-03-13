@@ -82,6 +82,11 @@ var font_regular : Font
 var font_semibold : Font
 var remaining_cells: int = 0
 var _last_board_width := 0.0
+var is_daily_game := false
+var daily_btn : Button
+var daily_streak_label : Label
+var win_streak_label : Label
+var win_best_streak_label : Label
 
 @onready var game_container = $MarginContainer
 @onready var difficulty_label = $MarginContainer/VBoxContainer/TopBar/DifficultyLabel
@@ -142,6 +147,7 @@ func _ready() -> void:
 	game_container.visible = false
 	difficulty_overlay.visible = true
 	_update_continue_button()
+	_update_daily_button()
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_WM_CLOSE_REQUEST:
@@ -205,6 +211,8 @@ func _apply_theme() -> void:
 	for overlay in [win_overlay, lose_overlay, pause_overlay, settings_overlay, stats_overlay, difficulty_overlay]:
 		theme_mgr.theme_overlay_children(overlay)
 
+	_update_daily_button()
+
 
 # --- Helpers ---
 
@@ -255,12 +263,45 @@ func _reset_game_state() -> void:
 		for c in range(SudokuSolver.SIZE):
 			notes[r].append(0)
 
+func _get_today_date_str() -> String:
+	var d := Time.get_date_dict_from_system()
+	return "%04d-%02d-%02d" % [d.year, d.month, d.day]
+
+func _get_yesterday_date_str() -> String:
+	var d := Time.get_date_dict_from_system()
+	var year := int(d.year)
+	var month := int(d.month)
+	var day := int(d.day) - 1
+	if day < 1:
+		month -= 1
+		if month < 1:
+			month = 12
+			year -= 1
+		day = _days_in_month(year, month)
+	return "%04d-%02d-%02d" % [year, month, day]
+
+func _days_in_month(year: int, month: int) -> int:
+	match month:
+		1, 3, 5, 7, 8, 10, 12: return 31
+		4, 6, 9, 11: return 30
+		2: return 29 if (year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)) else 28
+	return 30
+
+func _get_daily_info() -> Dictionary:
+	var d := Time.get_date_dict_from_system()
+	var seed_val : int = int(d.year) * 10000 + int(d.month) * 100 + int(d.day)
+	var daily_difficulties := ["Easy", "Medium", "Hard"]
+	var idx := int(d.day) % daily_difficulties.size()
+	var diff_name : String = daily_difficulties[idx]
+	return {"seed": seed_val, "difficulty": diff_name, "remove_count": DIFFICULTIES[diff_name]}
+
 func _go_to_difficulty(overlay: ColorRect) -> void:
 	overlay.visible = false
 	game_container.visible = false
 	difficulty_overlay.visible = true
 	save_mgr.clear()
 	_update_continue_button()
+	_update_daily_button()
 
 func _apply_cell_color(btn: Button, origin: String) -> void:
 	var color : Color
@@ -348,11 +389,19 @@ func _build_save_data() -> Dictionary:
 		"current_difficulty": current_difficulty,
 		"origins": origins,
 		"timer_started": timer_started,
+		"is_daily": is_daily_game,
+		"daily_date": _get_today_date_str() if is_daily_game else "",
 	}
 
 func _load_game() -> bool:
 	var data = save_mgr.load_data()
 	if data == null:
+		return false
+
+	is_daily_game = data.get("is_daily", false)
+	if is_daily_game and data.get("daily_date", "") != _get_today_date_str():
+		save_mgr.clear()
+		is_daily_game = false
 		return false
 
 	solution_board = SaveManager.to_int_board(data["solution_board"])
@@ -934,6 +983,8 @@ func check_win(delay := 0.0) -> void:
 	win_time_label.text = "Time: %02d:%02d" % [mins, secs]
 	win_mistakes_label.text = "Mistakes: %d/%d" % [mistakes, LIFE_LIMIT]
 
+	var gold := Color(0.9, 0.75, 0.2) if theme_mgr.dark_mode else Color(0.7, 0.5, 0.0)
+
 	var is_best := false
 	if current_difficulty != "":
 		stats_mgr.init_stats()
@@ -944,8 +995,26 @@ func check_win(delay := 0.0) -> void:
 	win_best_label.visible = is_best
 	if is_best:
 		win_best_label.text = "New Best Time!"
-		var gold := Color(0.9, 0.75, 0.2) if theme_mgr.dark_mode else Color(0.7, 0.5, 0.0)
 		win_best_label.add_theme_color_override("font_color", gold)
+
+	if is_daily_game:
+		var today := _get_today_date_str()
+		var yesterday := _get_yesterday_date_str()
+		stats_mgr.record_daily_won(today, yesterday, elapsed_time)
+		var streak := stats_mgr.get_daily_streak(today, yesterday)
+		win_streak_label.text = "Streak: %d %s" % [streak, "day" if streak == 1 else "days"]
+		win_streak_label.add_theme_color_override("font_color", gold)
+		win_streak_label.visible = true
+		var best_s := stats_mgr.get_daily_best_streak()
+		if streak >= best_s and streak > 1:
+			win_best_streak_label.text = "New Best Streak!"
+			win_best_streak_label.add_theme_color_override("font_color", gold)
+			win_best_streak_label.visible = true
+		else:
+			win_best_streak_label.visible = false
+	else:
+		win_streak_label.visible = false
+		win_best_streak_label.visible = false
 
 	save_mgr.clear()
 	if delay > 0.0:
@@ -978,6 +1047,14 @@ func create_win_overlay() -> void:
 	win_best_label = UIFactory.create_overlay_label("", FONT_SIZE_STATS_TITLE)
 	win_best_label.visible = false
 	stats_box.add_child(win_best_label)
+
+	win_streak_label = UIFactory.create_overlay_label("", FONT_SIZE_STATS_TITLE)
+	win_streak_label.visible = false
+	stats_box.add_child(win_streak_label)
+
+	win_best_streak_label = UIFactory.create_overlay_label("", FONT_SIZE_STATS_DETAIL)
+	win_best_streak_label.visible = false
+	stats_box.add_child(win_best_streak_label)
 
 	win_content.add_child(stats_box)
 	win_content.add_child(UIFactory.create_overlay_button("New Game", _go_to_difficulty.bind(win_overlay)))
@@ -1085,6 +1162,33 @@ func _update_stats_display() -> void:
 		child.queue_free()
 
 	stats_mgr.init_stats()
+
+	var today := _get_today_date_str()
+	var yesterday := _get_yesterday_date_str()
+	var daily_section := VBoxContainer.new()
+	daily_section.add_theme_constant_override("separation", 2)
+
+	var daily_title := Label.new()
+	daily_title.text = "Daily"
+	daily_title.add_theme_font_size_override("font_size", FONT_SIZE_STATS_TITLE)
+	var warm := Color(0.9, 0.75, 0.2) if theme_mgr.dark_mode else Color(0.6, 0.4, 0.0)
+	daily_title.add_theme_color_override("font_color", warm)
+	daily_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	daily_section.add_child(daily_title)
+
+	var streak := stats_mgr.get_daily_streak(today, yesterday)
+	var best_streak := stats_mgr.get_daily_best_streak()
+	var daily_best_time := stats_mgr.get_daily_best_time()
+
+	var daily_detail := Label.new()
+	daily_detail.text = "Streak: %d   Record: %d   Best: %s" % [streak, best_streak, stats_mgr.format_best_time(daily_best_time)]
+	daily_detail.add_theme_font_size_override("font_size", FONT_SIZE_STATS_DETAIL)
+	daily_detail.add_theme_color_override("font_color", theme_mgr.color_overlay_label)
+	daily_detail.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	daily_section.add_child(daily_detail)
+
+	stats_container.add_child(daily_section)
+
 	for diff_name in DIFFICULTIES:
 		var entry : Dictionary = stats_mgr.stats[diff_name]
 		var started := int(entry.get("started", 0))
@@ -1127,6 +1231,22 @@ func create_difficulty_overlay() -> void:
 	continue_btn.visible = false
 	vbox.add_child(continue_btn)
 
+	var daily_section := VBoxContainer.new()
+	daily_section.alignment = BoxContainer.ALIGNMENT_CENTER
+	daily_section.add_theme_constant_override("separation", 8)
+
+	daily_btn = UIFactory.create_overlay_button("Daily Puzzle", _on_daily_pressed)
+	daily_btn.custom_minimum_size = Vector2(340, 72)
+	daily_btn.add_theme_font_size_override("font_size", 32)
+	daily_section.add_child(daily_btn)
+
+	daily_streak_label = Label.new()
+	daily_streak_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	daily_streak_label.add_theme_font_size_override("font_size", FONT_SIZE_STATS_DETAIL)
+	daily_section.add_child(daily_streak_label)
+
+	vbox.add_child(daily_section)
+
 	for diff_name in DIFFICULTIES:
 		var btn = UIFactory.create_overlay_button(diff_name, _on_difficulty_selected.bind(diff_name, DIFFICULTIES[diff_name]))
 		btn.custom_minimum_size = Vector2(340, 72)
@@ -1139,7 +1259,16 @@ func _on_continue_pressed() -> void:
 		game_container.visible = true
 
 func _update_continue_button() -> void:
-	continue_btn.visible = save_mgr.has_save()
+	if not save_mgr.has_save():
+		continue_btn.visible = false
+		return
+	var data = save_mgr.load_data()
+	if data != null and data.get("is_daily", false):
+		if data.get("daily_date", "") != _get_today_date_str():
+			save_mgr.clear()
+			continue_btn.visible = false
+			return
+	continue_btn.visible = true
 
 func _on_another_life_pressed() -> void:
 	AdManager.show_rewarded_ad(_grant_extra_life)
@@ -1209,6 +1338,7 @@ func _on_difficulty_selected(diff_name: String, remove_count: int) -> void:
 	game_container.visible = true
 	difficulty_label.text = "Level: " + diff_name
 	current_difficulty = diff_name
+	is_daily_game = false
 
 	_reset_game_state()
 	stats_mgr.record_game_started(diff_name)
@@ -1219,6 +1349,43 @@ func _on_difficulty_selected(diff_name: String, remove_count: int) -> void:
 	update_ui()
 	refresh_board_styles()
 	save_mgr.request_save()
+
+func _on_daily_pressed() -> void:
+	var info := _get_daily_info()
+	difficulty_overlay.visible = false
+	game_container.visible = true
+	is_daily_game = true
+	current_difficulty = ""
+	difficulty_label.text = "Daily - " + info.difficulty
+
+	_reset_game_state()
+	var result = solver.generate_daily_puzzle(info.seed, info.remove_count)
+	solution_board = result[0]
+	player_board = result[1]
+	initial_board = player_board.duplicate(true)
+	update_ui()
+	refresh_board_styles()
+	save_mgr.request_save()
+
+func _update_daily_button() -> void:
+	var today := _get_today_date_str()
+	var yesterday := _get_yesterday_date_str()
+	var completed := stats_mgr.is_daily_completed(today)
+
+	if completed:
+		daily_btn.text = "Daily Complete ✓"
+		daily_btn.disabled = true
+	else:
+		daily_btn.text = "Daily Puzzle"
+		daily_btn.disabled = false
+
+	var streak := stats_mgr.get_daily_streak(today, yesterday)
+	var warm := Color(0.9, 0.75, 0.2) if theme_mgr.dark_mode else Color(0.6, 0.4, 0.0)
+	daily_streak_label.add_theme_color_override("font_color", warm)
+	if streak > 0:
+		daily_streak_label.text = "%d day streak" % streak
+	else:
+		daily_streak_label.text = "Start your streak!"
 
 
 # --- Update UI ---
