@@ -289,10 +289,10 @@ func _days_in_month(year: int, month: int) -> int:
 
 func _get_daily_info() -> Dictionary:
 	var d := Time.get_date_dict_from_system()
-	var seed_val := d.year * 10000 + d.month * 100 + d.day
-	var keys := DIFFICULTIES.keys()
-	var idx := int(d.day) % keys.size()
-	var diff_name : String = keys[idx]
+	var seed_val : int = int(d.year) * 10000 + int(d.month) * 100 + int(d.day)
+	var daily_difficulties := ["Easy", "Medium", "Hard"]
+	var idx := int(d.day) % daily_difficulties.size()
+	var diff_name : String = daily_difficulties[idx]
 	return {"seed": seed_val, "difficulty": diff_name, "remove_count": DIFFICULTIES[diff_name]}
 
 func _go_to_difficulty(overlay: ColorRect) -> void:
@@ -1376,8 +1376,7 @@ func _update_daily_button() -> void:
 		daily_btn.text = "Daily Complete ✓"
 		daily_btn.disabled = true
 	else:
-		var info := _get_daily_info()
-		daily_btn.text = "Daily Puzzle (%s)" % info.difficulty
+		daily_btn.text = "Daily Puzzle"
 		daily_btn.disabled = false
 
 	var streak := stats_mgr.get_daily_streak(today, yesterday)
