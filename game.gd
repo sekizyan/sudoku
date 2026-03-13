@@ -87,6 +87,14 @@ var daily_btn : Button
 var daily_streak_label : Label
 var win_streak_label : Label
 var win_best_streak_label : Label
+var is_custom_game := false
+var is_creating_puzzle := false
+var erase_btn : Button
+var clear_notes_action_btn : Button
+var create_clear_btn : Button
+var create_play_btn : Button
+var validation_overlay : ColorRect
+var validation_error_label : Label
 
 @onready var game_container = $MarginContainer
 @onready var difficulty_label = $MarginContainer/VBoxContainer/TopBar/DifficultyLabel
@@ -102,7 +110,7 @@ var win_best_streak_label : Label
 func _ready() -> void:
 	_setup_fonts()
 
-	stats_mgr.setup(DIFFICULTIES.keys())
+	stats_mgr.setup(DIFFICULTIES.keys() + ["Custom"])
 	stats_mgr.load_stats()
 
 	theme_mgr.set_dark_mode(stats_mgr.get_dark_mode())
@@ -123,6 +131,7 @@ func _ready() -> void:
 	create_difficulty_overlay()
 	create_settings_overlay()
 	create_stats_overlay()
+	create_validation_overlay()
 
 	UIFactory.apply_pause_button_style(pause_button)
 	pause_button.pressed.connect(_on_pause_pressed)
@@ -208,8 +217,10 @@ func _apply_theme() -> void:
 	stats_overlay.color = theme_mgr.color_overlay_solid
 	difficulty_overlay.color = theme_mgr.color_overlay_solid
 
-	for overlay in [win_overlay, lose_overlay, pause_overlay, settings_overlay, stats_overlay, difficulty_overlay]:
+	for overlay in [win_overlay, lose_overlay, pause_overlay, settings_overlay, stats_overlay, difficulty_overlay, validation_overlay]:
 		theme_mgr.theme_overlay_children(overlay)
+
+	validation_overlay.color = theme_mgr.color_overlay
 
 	_update_daily_button()
 
@@ -299,6 +310,9 @@ func _go_to_difficulty(overlay: ColorRect) -> void:
 	overlay.visible = false
 	game_container.visible = false
 	difficulty_overlay.visible = true
+	is_custom_game = false
+	is_creating_puzzle = false
+	_enter_solve_mode()
 	save_mgr.clear()
 	_update_continue_button()
 	_update_daily_button()
@@ -391,6 +405,8 @@ func _build_save_data() -> Dictionary:
 		"timer_started": timer_started,
 		"is_daily": is_daily_game,
 		"daily_date": _get_today_date_str() if is_daily_game else "",
+		"is_custom_game": is_custom_game,
+		"is_creating": is_creating_puzzle,
 	}
 
 func _load_game() -> bool:
@@ -399,6 +415,8 @@ func _load_game() -> bool:
 		return false
 
 	is_daily_game = data.get("is_daily", false)
+	is_custom_game = data.get("is_custom_game", false)
+	is_creating_puzzle = data.get("is_creating", false)
 	if is_daily_game and data.get("daily_date", "") != _get_today_date_str():
 		save_mgr.clear()
 		is_daily_game = false
@@ -455,7 +473,12 @@ func _load_game() -> bool:
 			if player_board[r][c] != solution_board[r][c]:
 				remaining_cells += 1
 
-	if timer_started:
+	if is_creating_puzzle:
+		for r in range(SudokuSolver.SIZE):
+			for c in range(SudokuSolver.SIZE):
+				buttons[r][c].set_meta("is_locked", false)
+		_enter_create_mode()
+	elif timer_started:
 		timer_running = true
 
 	return true
@@ -631,14 +654,22 @@ func create_number_pad() -> void:
 		number_buttons[i] = btn
 		number_pad.add_child(btn)
 
-	_create_action_button("Erase", _on_delete_pressed)
+	erase_btn = _create_action_button("Erase", _on_delete_pressed)
 	notes_toggle_btn = _create_action_button("Notes", _on_notes_toggled)
 	hint_btn = _create_action_button("Hint (%d)" % HINT_LIMIT, _on_hint_pressed)
 	undo_btn = _create_action_button("Undo", _on_undo_pressed, true)
 	auto_notes_btn = _create_action_button("Auto", _on_auto_notes_pressed)
-	_create_action_button("Clear Notes", _on_clear_notes_pressed)
+	clear_notes_action_btn = _create_action_button("Clear Notes", _on_clear_notes_pressed)
+	create_clear_btn = _create_action_button("Clear", _on_create_clear_pressed)
+	create_clear_btn.visible = false
+	create_play_btn = _create_action_button("Solve ▶", _on_create_play_pressed)
+	create_play_btn.visible = false
 
 func update_number_pad() -> void:
+	if is_creating_puzzle:
+		for i in range(1, 10):
+			number_buttons[i].disabled = false
+		return
 	for n in range(1, 10):
 		var count := 0
 		for r in range(SudokuSolver.SIZE):
@@ -823,6 +854,16 @@ func _on_undo_pressed() -> void:
 func _on_delete_pressed() -> void:
 	if selected_button == null:
 		return
+	if is_creating_puzzle:
+		var r = selected_button.get_meta("row")
+		var c = selected_button.get_meta("col")
+		if player_board[r][c] != 0:
+			player_board[r][c] = 0
+			selected_button.text = ""
+			_apply_cell_color(selected_button, "")
+			refresh_board_styles()
+			save_mgr.request_save()
+		return
 	if selected_button.get_meta("is_locked", false):
 		return
 
@@ -862,6 +903,20 @@ func _on_delete_pressed() -> void:
 
 func _on_number_pressed(number: int) -> void:
 	if selected_button == null:
+		return
+	if is_creating_puzzle:
+		var r = selected_button.get_meta("row")
+		var c = selected_button.get_meta("col")
+		if player_board[r][c] == number:
+			player_board[r][c] = 0
+			selected_button.text = ""
+			_apply_cell_color(selected_button, "")
+		else:
+			player_board[r][c] = number
+			selected_button.text = str(number)
+			_apply_cell_color(selected_button, "initial")
+		refresh_board_styles()
+		save_mgr.request_save()
 		return
 	if selected_button.get_meta("is_locked", false):
 		return
@@ -1023,6 +1078,173 @@ func check_win(delay := 0.0) -> void:
 		tween.tween_callback(func(): animator.show_win_overlay(win_overlay, win_content))
 	else:
 		animator.show_win_overlay(win_overlay, win_content)
+
+
+# --- Custom Puzzle ---
+
+func _on_create_puzzle_pressed() -> void:
+	difficulty_overlay.visible = false
+	game_container.visible = true
+	is_creating_puzzle = true
+	is_custom_game = true
+	is_daily_game = false
+	current_difficulty = "Custom"
+	difficulty_label.text = "Create Puzzle"
+
+	_reset_game_state()
+	solution_board = solver._create_empty_board()
+	player_board = solver._create_empty_board()
+	initial_board = solver._create_empty_board()
+
+	for r in range(SudokuSolver.SIZE):
+		for c in range(SudokuSolver.SIZE):
+			buttons[r][c].text = ""
+			buttons[r][c].set_meta("is_locked", false)
+			_apply_cell_color(buttons[r][c], "")
+			update_note_display(r, c)
+
+	update_number_pad()
+	_enter_create_mode()
+	save_mgr.request_save()
+
+func _on_create_play_pressed() -> void:
+	var filled := 0
+	for r in range(SudokuSolver.SIZE):
+		for c in range(SudokuSolver.SIZE):
+			if player_board[r][c] != 0:
+				filled += 1
+	if filled == 0:
+		_show_validation_error("Place some numbers first")
+		return
+
+	if _has_board_conflicts():
+		_show_validation_error("Conflicting numbers found")
+		return
+
+	var test := player_board.duplicate(true)
+	var solutions := solver._count_solutions(test)
+	if solutions == 0:
+		_show_validation_error("This puzzle has no solution")
+		return
+	if solutions > 1:
+		_show_validation_error("Multiple solutions found.\nAdd more numbers.")
+		return
+
+	var sol := player_board.duplicate(true)
+	solver._fill_board(sol)
+	solution_board = sol
+	initial_board = player_board.duplicate(true)
+
+	is_creating_puzzle = false
+	_enter_solve_mode()
+	_reset_game_state()
+	player_board = initial_board.duplicate(true)
+	difficulty_label.text = "Custom"
+	stats_mgr.record_game_started("Custom")
+
+	for r in range(SudokuSolver.SIZE):
+		for c in range(SudokuSolver.SIZE):
+			var btn = buttons[r][c]
+			if initial_board[r][c] != 0:
+				btn.text = str(initial_board[r][c])
+				btn.set_meta("is_locked", true)
+				_apply_cell_color(btn, "initial")
+			else:
+				btn.text = ""
+				btn.set_meta("is_locked", false)
+				_apply_cell_color(btn, "")
+			update_note_display(r, c)
+
+	remaining_cells = 0
+	for r in range(SudokuSolver.SIZE):
+		for c in range(SudokuSolver.SIZE):
+			if player_board[r][c] != solution_board[r][c]:
+				remaining_cells += 1
+
+	update_number_pad()
+	save_mgr.request_save()
+
+func _on_create_clear_pressed() -> void:
+	for r in range(SudokuSolver.SIZE):
+		for c in range(SudokuSolver.SIZE):
+			player_board[r][c] = 0
+			buttons[r][c].text = ""
+			_apply_cell_color(buttons[r][c], "")
+	selected_button = null
+	for r in range(SudokuSolver.SIZE):
+		for c in range(SudokuSolver.SIZE):
+			theme_mgr.apply_button_styles(buttons[r][c], theme_mgr.get_cell_style(r, c, &"default"), theme_mgr.get_cell_style(r, c, &"default_pressed"))
+	save_mgr.request_save()
+
+func _enter_create_mode() -> void:
+	timer_label.visible = false
+	mistakes_label.visible = false
+	pause_button.visible = false
+	notes_toggle_btn.visible = false
+	hint_btn.visible = false
+	undo_btn.visible = false
+	auto_notes_btn.visible = false
+	clear_notes_action_btn.visible = false
+	create_clear_btn.visible = true
+	create_play_btn.visible = true
+
+func _enter_solve_mode() -> void:
+	timer_label.visible = true
+	mistakes_label.visible = true
+	pause_button.visible = true
+	notes_toggle_btn.visible = true
+	hint_btn.visible = true
+	undo_btn.visible = true
+	auto_notes_btn.visible = true
+	clear_notes_action_btn.visible = true
+	create_clear_btn.visible = false
+	create_play_btn.visible = false
+
+func _has_board_conflicts() -> bool:
+	for r in range(SudokuSolver.SIZE):
+		var seen := {}
+		for c in range(SudokuSolver.SIZE):
+			var n = player_board[r][c]
+			if n != 0:
+				if seen.has(n):
+					return true
+				seen[n] = true
+	for c in range(SudokuSolver.SIZE):
+		var seen := {}
+		for r in range(SudokuSolver.SIZE):
+			var n = player_board[r][c]
+			if n != 0:
+				if seen.has(n):
+					return true
+				seen[n] = true
+	for box in range(SudokuSolver.SIZE):
+		var seen := {}
+		var br = (box / SudokuSolver.BOX_SIZE) * SudokuSolver.BOX_SIZE
+		var bc = (box % SudokuSolver.BOX_SIZE) * SudokuSolver.BOX_SIZE
+		for r in range(br, br + SudokuSolver.BOX_SIZE):
+			for c in range(bc, bc + SudokuSolver.BOX_SIZE):
+				var n = player_board[r][c]
+				if n != 0:
+					if seen.has(n):
+						return true
+					seen[n] = true
+	return false
+
+func _show_validation_error(msg: String) -> void:
+	validation_error_label.text = msg
+	validation_overlay.visible = true
+
+func _on_validation_back() -> void:
+	validation_overlay.visible = false
+
+func create_validation_overlay() -> void:
+	var result = UIFactory.create_overlay(self)
+	validation_overlay = result[0]
+	var vbox = result[1]
+
+	validation_error_label = UIFactory.create_overlay_label("", 32)
+	vbox.add_child(validation_error_label)
+	vbox.add_child(UIFactory.create_overlay_button("Back", _on_validation_back))
 
 
 # --- Overlays ---
@@ -1189,11 +1411,14 @@ func _update_stats_display() -> void:
 
 	stats_container.add_child(daily_section)
 
-	for diff_name in DIFFICULTIES:
+	for diff_name in DIFFICULTIES.keys() + ["Custom"]:
 		var entry : Dictionary = stats_mgr.stats[diff_name]
 		var started := int(entry.get("started", 0))
 		var won := int(entry.get("won", 0))
 		var best := float(entry.get("best_time", -1.0))
+
+		if diff_name == "Custom" and started == 0 and won == 0:
+			continue
 
 		var section := VBoxContainer.new()
 		section.add_theme_constant_override("separation", 2)
@@ -1252,6 +1477,15 @@ func create_difficulty_overlay() -> void:
 		btn.custom_minimum_size = Vector2(340, 72)
 		btn.add_theme_font_size_override("font_size", 32)
 		vbox.add_child(btn)
+
+	var create_spacer := Control.new()
+	create_spacer.custom_minimum_size = Vector2(0, 8)
+	vbox.add_child(create_spacer)
+
+	var create_btn = UIFactory.create_overlay_button("Create Your Own", _on_create_puzzle_pressed)
+	create_btn.custom_minimum_size = Vector2(340, 72)
+	create_btn.add_theme_font_size_override("font_size", 32)
+	vbox.add_child(create_btn)
 
 func _on_continue_pressed() -> void:
 	if _load_game():
@@ -1339,6 +1573,9 @@ func _on_difficulty_selected(diff_name: String, remove_count: int) -> void:
 	difficulty_label.text = "Level: " + diff_name
 	current_difficulty = diff_name
 	is_daily_game = false
+	is_custom_game = false
+	is_creating_puzzle = false
+	_enter_solve_mode()
 
 	_reset_game_state()
 	stats_mgr.record_game_started(diff_name)
@@ -1355,7 +1592,10 @@ func _on_daily_pressed() -> void:
 	difficulty_overlay.visible = false
 	game_container.visible = true
 	is_daily_game = true
+	is_custom_game = false
+	is_creating_puzzle = false
 	current_difficulty = ""
+	_enter_solve_mode()
 	difficulty_label.text = "Daily - " + info.difficulty
 
 	_reset_game_state()
