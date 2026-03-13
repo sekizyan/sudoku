@@ -13,30 +13,19 @@ const LIFE_LIMIT := 3
 const HINT_LIMIT := 3
 
 const CORNER_RADIUS_BOARD := 8
-const CORNER_RADIUS_TOGGLE := 21
-
 const FONT_SIZE_TOP_BAR := 28
-const FONT_SIZE_OVERLAY_TITLE := 72
-const FONT_SIZE_OVERLAY_BTN := 36
-const FONT_SIZE_SETTINGS_LABEL := 36
-const FONT_SIZE_STATS_TITLE := 28
-const FONT_SIZE_STATS_DETAIL := 22
-
-const TOGGLE_TRACK_W := 81
-const TOGGLE_TRACK_H := 41
-const TOGGLE_KNOB_SIZE := 31
-const TOGGLE_KNOB_MARGIN := 5
-
 const BOARD_BORDER_WIDTH := 2
 const BOX_GAP := 3
 const CELL_GAP := 1
-
 const UNDO_LIMIT := 100
 
 var theme_mgr := ThemeManager.new()
 var save_mgr: SaveManager
 var stats_mgr := StatsManager.new()
 var animator := BoardAnimator.new()
+var actions := GameActions.new()
+var custom := CustomPuzzle.new()
+var overlay_mgr := OverlayManager.new()
 
 var solver := SudokuSolver.new()
 var solution_board: Array = []
@@ -46,35 +35,19 @@ var initial_board: Array = []
 var selected_button : Button = null
 var buttons: Array[Array] = []
 var number_buttons : Dictionary = {}
-var win_overlay : ColorRect
-var win_content : VBoxContainer
-var win_time_label : Label
-var win_mistakes_label : Label
-var win_best_label : Label
-var lose_overlay : ColorRect
-var pause_overlay : ColorRect
-var settings_overlay : ColorRect
-var stats_overlay : ColorRect
-var stats_container : VBoxContainer
-var difficulty_overlay : ColorRect
-var continue_btn : Button
-var notes_mode := false
 var notes_toggle_btn : Button
 var hint_btn : Button
-var hints_used := 0
-var bonus_hints := 0
 var undo_btn : Button
 var auto_notes_btn : Button
-var undo_stack: Array[Dictionary] = []
-var notes: Array = []
+var erase_btn : Button
+var clear_notes_action_btn : Button
+var create_clear_btn : Button
+var create_play_btn : Button
 var note_labels: Array[Array] = []
 var timer_running := false
 var timer_started := false
 var elapsed_time := 0.0
-var mistakes := 0
 var current_difficulty := ""
-var theme_toggle_track : Panel
-var theme_toggle_knob : Panel
 var bg_rect : ColorRect
 var board_wrapper : PanelContainer
 var box_grids: Array[GridContainer] = []
@@ -83,18 +56,6 @@ var font_semibold : Font
 var remaining_cells: int = 0
 var _last_board_width := 0.0
 var is_daily_game := false
-var daily_btn : Button
-var daily_streak_label : Label
-var win_streak_label : Label
-var win_best_streak_label : Label
-var is_custom_game := false
-var is_creating_puzzle := false
-var erase_btn : Button
-var clear_notes_action_btn : Button
-var create_clear_btn : Button
-var create_play_btn : Button
-var validation_overlay : ColorRect
-var validation_error_label : Label
 
 @onready var game_container = $MarginContainer
 @onready var difficulty_label = $MarginContainer/VBoxContainer/TopBar/DifficultyLabel
@@ -116,6 +77,9 @@ func _ready() -> void:
 	theme_mgr.set_dark_mode(stats_mgr.get_dark_mode())
 
 	animator.setup(self)
+	actions.setup(self)
+	custom.setup(self)
+	overlay_mgr.setup(self)
 
 	bg_rect = ColorRect.new()
 	bg_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -125,20 +89,14 @@ func _ready() -> void:
 
 	create_board_ui()
 	create_number_pad()
-	create_win_overlay()
-	create_lose_overlay()
-	create_pause_overlay()
-	create_difficulty_overlay()
-	create_settings_overlay()
-	create_stats_overlay()
-	create_validation_overlay()
+	overlay_mgr.create_all()
 
 	UIFactory.apply_pause_button_style(pause_button)
-	pause_button.pressed.connect(_on_pause_pressed)
+	pause_button.pressed.connect(overlay_mgr.on_pause_pressed)
 	UIFactory.apply_pause_button_style(settings_button)
 	settings_button.add_theme_font_size_override("font_size", 34)
 	settings_button.custom_minimum_size = Vector2(62, 62)
-	settings_button.pressed.connect(_on_settings_pressed)
+	settings_button.pressed.connect(overlay_mgr.on_settings_pressed)
 	move_child(settings_button, -1)
 
 	_setup_top_bar_labels()
@@ -150,17 +108,17 @@ func _ready() -> void:
 	add_child(save_mgr)
 	save_mgr.set_data_provider(_build_save_data)
 
-	_update_toggle_visual()
+	overlay_mgr.update_toggle_visual()
 	_apply_theme()
 
 	game_container.visible = false
-	difficulty_overlay.visible = true
-	_update_continue_button()
-	_update_daily_button()
+	overlay_mgr.difficulty_overlay.visible = true
+	overlay_mgr.update_continue_button()
+	overlay_mgr.update_daily_button()
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_WM_CLOSE_REQUEST:
-		if game_container.visible and not win_overlay.visible and not lose_overlay.visible:
+		if game_container.visible and not overlay_mgr.win_overlay.visible and not overlay_mgr.lose_overlay.visible:
 			save_mgr.save_immediate()
 
 
@@ -205,74 +163,22 @@ func _apply_theme() -> void:
 	for child in action_buttons.get_children():
 		theme_mgr.apply_numpad_theme(child)
 
-	if notes_mode:
-		var style := theme_mgr.create_numpad_style()
-		style.bg_color = theme_mgr.color_notes_active
-		theme_mgr.apply_button_styles(notes_toggle_btn, style)
-
-	win_overlay.color = theme_mgr.color_overlay
-	lose_overlay.color = theme_mgr.color_overlay
-	pause_overlay.color = theme_mgr.color_overlay
-	settings_overlay.color = theme_mgr.color_overlay_solid
-	stats_overlay.color = theme_mgr.color_overlay_solid
-	difficulty_overlay.color = theme_mgr.color_overlay_solid
-
-	for overlay in [win_overlay, lose_overlay, pause_overlay, settings_overlay, stats_overlay, difficulty_overlay, validation_overlay]:
-		theme_mgr.theme_overlay_children(overlay)
-
-	validation_overlay.color = theme_mgr.color_overlay
-
-	_update_daily_button()
+	actions.apply_theme()
+	overlay_mgr.apply_theme()
 
 
 # --- Helpers ---
-
-func _has_note(r: int, c: int, n: int) -> bool:
-	return (notes[r][c] & (1 << n)) != 0
-
-func _set_note(r: int, c: int, n: int) -> void:
-	notes[r][c] |= (1 << n)
-
-func _clear_note(r: int, c: int, n: int) -> void:
-	notes[r][c] &= ~(1 << n)
-
-func _toggle_note(r: int, c: int, n: int) -> void:
-	notes[r][c] ^= (1 << n)
-
-func _clear_all_notes(r: int, c: int) -> void:
-	notes[r][c] = 0
-
-func _get_note_list(r: int, c: int) -> Array[int]:
-	var result: Array[int] = []
-	for n in range(1, 10):
-		if _has_note(r, c, n):
-			result.append(n)
-	return result
 
 func _reset_game_state() -> void:
 	elapsed_time = 0.0
 	timer_running = false
 	timer_started = false
 	timer_label.text = "Time: 00:00"
-	mistakes = 0
-	mistakes_label.text = "Mistakes: 0/%d" % LIFE_LIMIT
 	selected_button = null
 	for r in range(SudokuSolver.SIZE):
 		for c in range(SudokuSolver.SIZE):
 			theme_mgr.apply_button_styles(buttons[r][c], theme_mgr.get_cell_style(r, c, &"default"), theme_mgr.get_cell_style(r, c, &"default_pressed"))
-	notes_mode = false
-	var style := theme_mgr.create_numpad_style()
-	theme_mgr.apply_button_styles(notes_toggle_btn, style)
-	hints_used = 0
-	bonus_hints = 0
-	_update_hint_button()
-	undo_stack.clear()
-	undo_btn.disabled = true
-	notes = []
-	for r in range(SudokuSolver.SIZE):
-		notes.append([])
-		for c in range(SudokuSolver.SIZE):
-			notes[r].append(0)
+	actions.reset()
 
 func _get_today_date_str() -> String:
 	var d := Time.get_date_dict_from_system()
@@ -305,17 +211,6 @@ func _get_daily_info() -> Dictionary:
 	var idx := int(d.day) % daily_difficulties.size()
 	var diff_name : String = daily_difficulties[idx]
 	return {"seed": seed_val, "difficulty": diff_name, "remove_count": DIFFICULTIES[diff_name]}
-
-func _go_to_difficulty(overlay: ColorRect) -> void:
-	overlay.visible = false
-	game_container.visible = false
-	difficulty_overlay.visible = true
-	is_custom_game = false
-	is_creating_puzzle = false
-	_enter_solve_mode()
-	save_mgr.clear()
-	_update_continue_button()
-	_update_daily_button()
 
 func _apply_cell_color(btn: Button, origin: String) -> void:
 	var color : Color
@@ -394,19 +289,19 @@ func _build_save_data() -> Dictionary:
 		"solution_board": solution_board,
 		"player_board": player_board,
 		"initial_board": initial_board,
-		"notes": notes,
+		"notes": actions.notes,
 		"elapsed_time": elapsed_time,
-		"mistakes": mistakes,
-		"hints_used": hints_used,
-		"notes_mode": notes_mode,
+		"mistakes": actions.mistakes,
+		"hints_used": actions.hints_used,
+		"notes_mode": actions.notes_mode,
 		"difficulty_text": difficulty_label.text,
 		"current_difficulty": current_difficulty,
 		"origins": origins,
 		"timer_started": timer_started,
 		"is_daily": is_daily_game,
 		"daily_date": _get_today_date_str() if is_daily_game else "",
-		"is_custom_game": is_custom_game,
-		"is_creating": is_creating_puzzle,
+		"is_custom_game": custom.is_custom_game,
+		"is_creating": custom.is_creating_puzzle,
 	}
 
 func _load_game() -> bool:
@@ -415,8 +310,8 @@ func _load_game() -> bool:
 		return false
 
 	is_daily_game = data.get("is_daily", false)
-	is_custom_game = data.get("is_custom_game", false)
-	is_creating_puzzle = data.get("is_creating", false)
+	custom.is_custom_game = data.get("is_custom_game", false)
+	custom.is_creating_puzzle = data.get("is_creating", false)
 	if is_daily_game and data.get("daily_date", "") != _get_today_date_str():
 		save_mgr.clear()
 		is_daily_game = false
@@ -425,23 +320,23 @@ func _load_game() -> bool:
 	solution_board = SaveManager.to_int_board(data["solution_board"])
 	player_board = SaveManager.to_int_board(data["player_board"])
 	initial_board = SaveManager.to_int_board(data["initial_board"])
-	notes = SaveManager.to_int_board(data["notes"])
+	actions.notes = SaveManager.to_int_board(data["notes"])
 	elapsed_time = float(data["elapsed_time"])
-	mistakes = int(data["mistakes"])
-	hints_used = int(data["hints_used"])
-	notes_mode = data.get("notes_mode", false)
+	actions.mistakes = int(data["mistakes"])
+	actions.hints_used = int(data["hints_used"])
+	actions.notes_mode = data.get("notes_mode", false)
 	timer_started = data.get("timer_started", false)
 	current_difficulty = data.get("current_difficulty", "")
 
 	difficulty_label.text = data["difficulty_text"]
-	mistakes_label.text = "Mistakes: %d/%d" % [mistakes, LIFE_LIMIT]
+	mistakes_label.text = "Mistakes: %d/%d" % [actions.mistakes, LIFE_LIMIT]
 	timer_label.text = format_time(elapsed_time)
-	bonus_hints = 0
-	_update_hint_button()
-	undo_stack.clear()
+	actions.bonus_hints = 0
+	actions.update_hint_button()
+	actions.undo_stack.clear()
 	undo_btn.disabled = true
 
-	if notes_mode:
+	if actions.notes_mode:
 		var style := theme_mgr.create_numpad_style()
 		style.bg_color = theme_mgr.color_notes_active
 		theme_mgr.apply_button_styles(notes_toggle_btn, style)
@@ -463,9 +358,9 @@ func _load_game() -> bool:
 				btn.set_meta("is_locked", origin in ["initial", "player", "hint"])
 
 			_apply_cell_color(btn, origin)
-			update_note_display(r, c)
+			actions.update_note_display(r, c)
 
-	update_number_pad()
+	actions.update_number_pad()
 
 	remaining_cells = 0
 	for r in range(SudokuSolver.SIZE):
@@ -473,11 +368,11 @@ func _load_game() -> bool:
 			if player_board[r][c] != solution_board[r][c]:
 				remaining_cells += 1
 
-	if is_creating_puzzle:
+	if custom.is_creating_puzzle:
 		for r in range(SudokuSolver.SIZE):
 			for c in range(SudokuSolver.SIZE):
 				buttons[r][c].set_meta("is_locked", false)
-		_enter_create_mode()
+		custom.enter_create_mode()
 	elif timer_started:
 		timer_running = true
 
@@ -618,7 +513,7 @@ func refresh_board_styles() -> void:
 			var in_highlight = (r == sel_r) or (c == sel_c) or (
 				r >= box_start_r and r < box_start_r + SudokuSolver.BOX_SIZE and
 				c >= box_start_c and c < box_start_c + SudokuSolver.BOX_SIZE)
-			var has_note_match = (sel_value != 0 and cell_value == 0 and _has_note(r, c, sel_value))
+			var has_note_match = (sel_value != 0 and cell_value == 0 and actions.has_note(r, c, sel_value))
 			var same_number = (sel_value != 0 and (cell_value == sel_value or has_note_match) and not is_selected)
 			var is_conflict := Vector2i(r, c) in conflict_set
 
@@ -650,982 +545,20 @@ func create_number_pad() -> void:
 		btn.focus_mode = Control.FOCUS_NONE
 		btn.add_theme_font_size_override("font_size", FONT_SIZE)
 		theme_mgr.apply_numpad_theme(btn)
-		btn.pressed.connect(_on_number_pressed.bind(i))
+		btn.pressed.connect(actions.on_number_pressed.bind(i))
 		number_buttons[i] = btn
 		number_pad.add_child(btn)
 
-	erase_btn = _create_action_button("Erase", _on_delete_pressed)
-	notes_toggle_btn = _create_action_button("Notes", _on_notes_toggled)
-	hint_btn = _create_action_button("Hint (%d)" % HINT_LIMIT, _on_hint_pressed)
-	undo_btn = _create_action_button("Undo", _on_undo_pressed, true)
-	auto_notes_btn = _create_action_button("Auto", _on_auto_notes_pressed)
-	clear_notes_action_btn = _create_action_button("Clear Notes", _on_clear_notes_pressed)
-	create_clear_btn = _create_action_button("Clear", _on_create_clear_pressed)
+	erase_btn = _create_action_button("Erase", actions.on_delete_pressed)
+	notes_toggle_btn = _create_action_button("Notes", actions.on_notes_toggled)
+	hint_btn = _create_action_button("Hint (%d)" % HINT_LIMIT, actions.on_hint_pressed)
+	undo_btn = _create_action_button("Undo", actions.on_undo_pressed, true)
+	auto_notes_btn = _create_action_button("Auto", actions.on_auto_notes_pressed)
+	clear_notes_action_btn = _create_action_button("Clear Notes", actions.on_clear_notes_pressed)
+	create_clear_btn = _create_action_button("Clear", custom.on_create_clear_pressed)
 	create_clear_btn.visible = false
-	create_play_btn = _create_action_button("Solve ▶", _on_create_play_pressed)
+	create_play_btn = _create_action_button("Solve ▶", custom.on_create_play_pressed)
 	create_play_btn.visible = false
-
-func update_number_pad() -> void:
-	if is_creating_puzzle:
-		for i in range(1, 10):
-			number_buttons[i].disabled = false
-		return
-	for n in range(1, 10):
-		var count := 0
-		for r in range(SudokuSolver.SIZE):
-			for c in range(SudokuSolver.SIZE):
-				if player_board[r][c] == n and solution_board[r][c] == n:
-					count += 1
-		number_buttons[n].disabled = (count >= SudokuSolver.SIZE)
-
-func update_note_display(r: int, c: int) -> void:
-	var data = note_labels[r][c]
-	var grid : GridContainer = data["grid"]
-	var labels : Array = data["labels"]
-
-	var has_notes = notes[r][c] != 0 and player_board[r][c] == 0
-	grid.visible = has_notes
-	buttons[r][c].text = "" if has_notes else (str(player_board[r][c]) if player_board[r][c] != 0 else "")
-
-	for n in range(1, 10):
-		labels[n - 1].text = str(n) if _has_note(r, c, n) and has_notes else ""
-
-
-# --- Game Actions ---
-
-func _on_notes_toggled() -> void:
-	notes_mode = !notes_mode
-	var style := theme_mgr.create_numpad_style()
-	if notes_mode:
-		style.bg_color = theme_mgr.color_notes_active
-	theme_mgr.apply_button_styles(notes_toggle_btn, style)
-	save_mgr.request_save()
-
-func _on_auto_notes_pressed() -> void:
-	var constraints := solver.build_constraints(player_board)
-	var row_used : Array = constraints[0]
-	var col_used : Array = constraints[1]
-	var box_used : Array = constraints[2]
-
-	for r in range(SudokuSolver.SIZE):
-		for c in range(SudokuSolver.SIZE):
-			if player_board[r][c] != 0:
-				continue
-			var bi = (r / SudokuSolver.BOX_SIZE) * SudokuSolver.BOX_SIZE + c / SudokuSolver.BOX_SIZE
-			var mask := 0
-			for n in range(1, 10):
-				if not row_used[r].has(n) and not col_used[c].has(n) and not box_used[bi].has(n):
-					mask |= (1 << n)
-			notes[r][c] = mask
-			update_note_display(r, c)
-	save_mgr.request_save()
-
-func _on_clear_notes_pressed() -> void:
-	for r in range(SudokuSolver.SIZE):
-		for c in range(SudokuSolver.SIZE):
-			if notes[r][c] != 0:
-				notes[r][c] = 0
-				update_note_display(r, c)
-	save_mgr.request_save()
-
-func _on_hint_pressed() -> void:
-	if selected_button == null:
-		return
-
-	var r = selected_button.get_meta("row")
-	var c = selected_button.get_meta("col")
-
-	if player_board[r][c] == solution_board[r][c]:
-		return
-
-	var total_hints := HINT_LIMIT + bonus_hints
-	if hints_used >= total_hints:
-		AdManager.show_rewarded_ad(_grant_bonus_hint)
-		return
-
-	_use_hint()
-
-func _grant_bonus_hint() -> void:
-	bonus_hints += 1
-	_update_hint_button()
-	_use_hint()
-
-func _use_hint() -> void:
-	if selected_button == null:
-		return
-
-	var r = selected_button.get_meta("row")
-	var c = selected_button.get_meta("col")
-
-	if player_board[r][c] == solution_board[r][c]:
-		return
-
-	if not timer_started:
-		timer_started = true
-		timer_running = true
-
-	var correct = solution_board[r][c]
-	_clear_all_notes(r, c)
-	update_note_display(r, c)
-
-	player_board[r][c] = correct
-	selected_button.text = str(correct)
-	selected_button.set_meta("is_locked", true)
-	_apply_cell_color(selected_button, "hint")
-	animator.animate_pop(selected_button, theme_mgr.flash_color())
-
-	remaining_cells -= 1
-
-	hints_used += 1
-	_update_hint_button()
-
-	clear_notes_for_peers(r, c, correct)
-	update_number_pad()
-	refresh_board_styles()
-	var anim_duration := animator.check_group_completions(r, c, player_board, solution_board, buttons, theme_mgr.flash_color())
-	check_win(anim_duration)
-	if not win_overlay.visible:
-		save_mgr.request_save()
-
-func _update_hint_button() -> void:
-	var total_hints := HINT_LIMIT + bonus_hints
-	var remaining := total_hints - hints_used
-	if remaining > 0:
-		hint_btn.text = "Hint (%d)" % remaining
-		hint_btn.disabled = false
-	else:
-		hint_btn.text = "Ad Hint"
-		hint_btn.disabled = false
-
-func _on_undo_pressed() -> void:
-	if undo_stack.is_empty():
-		return
-
-	var entry = undo_stack.pop_back()
-	var r : int = entry["row"]
-	var c : int = entry["col"]
-	var btn = buttons[r][c]
-
-	match entry["type"]:
-		"place":
-			for peer in entry["cleared_peers"]:
-				_set_note(peer["row"], peer["col"], peer["number"])
-				update_note_display(peer["row"], peer["col"])
-
-			if not entry.get("was_mistake", false):
-				remaining_cells += 1
-
-			player_board[r][c] = entry["prev_value"]
-			notes[r][c] = entry["prev_notes"]
-			btn.set_meta("is_locked", false)
-
-			if entry["prev_value"] == 0:
-				btn.text = ""
-			else:
-				btn.text = str(entry["prev_value"])
-
-			_apply_cell_color(btn, entry.get("prev_origin", ""))
-			update_note_display(r, c)
-
-		"erase":
-			player_board[r][c] = entry["prev_value"]
-			notes[r][c] = entry["prev_notes"]
-
-			if entry["prev_value"] != 0:
-				btn.text = str(entry["prev_value"])
-			else:
-				btn.text = ""
-
-			_apply_cell_color(btn, entry.get("prev_origin", ""))
-			update_note_display(r, c)
-
-		"note":
-			if entry["was_added"]:
-				_clear_note(r, c, entry["number"])
-			else:
-				_set_note(r, c, entry["number"])
-			update_note_display(r, c)
-
-	undo_btn.disabled = undo_stack.is_empty()
-	update_number_pad()
-	refresh_board_styles()
-	save_mgr.request_save()
-
-func _on_delete_pressed() -> void:
-	if selected_button == null:
-		return
-	if is_creating_puzzle:
-		var r = selected_button.get_meta("row")
-		var c = selected_button.get_meta("col")
-		if player_board[r][c] != 0:
-			player_board[r][c] = 0
-			selected_button.text = ""
-			_apply_cell_color(selected_button, "")
-			refresh_board_styles()
-			save_mgr.request_save()
-		return
-	if selected_button.get_meta("is_locked", false):
-		return
-
-	var r = selected_button.get_meta("row")
-	var c = selected_button.get_meta("col")
-
-	var prev_value = player_board[r][c]
-	var prev_notes = notes[r][c]
-	var prev_origin = selected_button.get_meta("origin", "")
-
-	if prev_value == 0 and prev_notes == 0:
-		return
-
-	if notes[r][c] != 0:
-		notes[r][c] = 0
-		update_note_display(r, c)
-
-	if player_board[r][c] != 0:
-		player_board[r][c] = 0
-		selected_button.text = ""
-		_apply_cell_color(selected_button, "")
-		update_number_pad()
-		refresh_board_styles()
-
-	undo_stack.append({
-		"type": "erase",
-		"row": r,
-		"col": c,
-		"prev_value": prev_value,
-		"prev_notes": prev_notes,
-		"prev_origin": prev_origin,
-	})
-	if undo_stack.size() > UNDO_LIMIT:
-		undo_stack.pop_front()
-	undo_btn.disabled = false
-	save_mgr.request_save()
-
-func _on_number_pressed(number: int) -> void:
-	if selected_button == null:
-		return
-	if is_creating_puzzle:
-		var r = selected_button.get_meta("row")
-		var c = selected_button.get_meta("col")
-		if player_board[r][c] == number:
-			player_board[r][c] = 0
-			selected_button.text = ""
-			_apply_cell_color(selected_button, "")
-		else:
-			player_board[r][c] = number
-			selected_button.text = str(number)
-			_apply_cell_color(selected_button, "initial")
-		refresh_board_styles()
-		save_mgr.request_save()
-		return
-	if selected_button.get_meta("is_locked", false):
-		return
-
-	var r = selected_button.get_meta("row")
-	var c = selected_button.get_meta("col")
-
-	if notes_mode:
-		if player_board[r][c] != 0:
-			return
-		if not timer_started:
-			timer_started = true
-			timer_running = true
-		var was_added : bool = not _has_note(r, c, number)
-		_toggle_note(r, c, number)
-		undo_stack.append({
-			"type": "note",
-			"row": r,
-			"col": c,
-			"number": number,
-			"was_added": was_added,
-		})
-		if undo_stack.size() > UNDO_LIMIT:
-			undo_stack.pop_front()
-		undo_btn.disabled = false
-		update_note_display(r, c)
-		save_mgr.request_save()
-		return
-
-	if not timer_started:
-		timer_started = true
-		timer_running = true
-
-	var prev_value = player_board[r][c]
-	var prev_notes = notes[r][c]
-	var prev_origin = selected_button.get_meta("origin", "")
-
-	_clear_all_notes(r, c)
-	update_note_display(r, c)
-
-	player_board[r][c] = number
-	selected_button.text = str(number)
-	var was_mistake : bool = (solution_board[r][c] != number)
-	if not was_mistake:
-		remaining_cells -= 1
-		selected_button.set_meta("is_locked", true)
-		_apply_cell_color(selected_button, "player")
-		animator.animate_pop(selected_button, theme_mgr.flash_color())
-	else:
-		_apply_cell_color(selected_button, "wrong")
-		animator.animate_shake(selected_button)
-		mistakes += 1
-		mistakes_label.text = "Mistakes: %d/%d" % [mistakes, LIFE_LIMIT]
-		if mistakes >= LIFE_LIMIT:
-			timer_running = false
-			lose_overlay.visible = true
-			save_mgr.clear()
-			return
-
-	var cleared_peers = clear_notes_for_peers(r, c, number)
-
-	undo_stack.append({
-		"type": "place",
-		"row": r,
-		"col": c,
-		"prev_value": prev_value,
-		"prev_notes": prev_notes,
-		"prev_origin": prev_origin,
-		"cleared_peers": cleared_peers,
-		"was_mistake": was_mistake,
-	})
-	if undo_stack.size() > UNDO_LIMIT:
-		undo_stack.pop_front()
-	undo_btn.disabled = false
-
-	update_number_pad()
-	refresh_board_styles()
-	var anim_duration := 0.0
-	if not was_mistake:
-		anim_duration = animator.check_group_completions(r, c, player_board, solution_board, buttons, theme_mgr.flash_color())
-	check_win(anim_duration)
-	if not win_overlay.visible:
-		save_mgr.request_save()
-
-func clear_notes_for_peers(row: int, col: int, number: int) -> Array:
-	var cleared := []
-	var visited := {}
-	var box_r = (row / SudokuSolver.BOX_SIZE) * SudokuSolver.BOX_SIZE
-	var box_c = (col / SudokuSolver.BOX_SIZE) * SudokuSolver.BOX_SIZE
-
-	var peers := []
-	for i in range(SudokuSolver.SIZE):
-		peers.append(Vector2i(row, i))
-		peers.append(Vector2i(i, col))
-	for br in range(box_r, box_r + SudokuSolver.BOX_SIZE):
-		for bc in range(box_c, box_c + SudokuSolver.BOX_SIZE):
-			peers.append(Vector2i(br, bc))
-
-	for peer in peers:
-		if peer == Vector2i(row, col):
-			continue
-		if visited.has(peer):
-			continue
-		visited[peer] = true
-		if _has_note(peer.x, peer.y, number):
-			_clear_note(peer.x, peer.y, number)
-			cleared.append({"row": peer.x, "col": peer.y, "number": number})
-			update_note_display(peer.x, peer.y)
-
-	return cleared
-
-func check_win(delay := 0.0) -> void:
-	if remaining_cells > 0:
-		return
-	timer_running = false
-
-	var mins := int(elapsed_time) / 60
-	var secs := int(elapsed_time) % 60
-	win_time_label.text = "Time: %02d:%02d" % [mins, secs]
-	win_mistakes_label.text = "Mistakes: %d/%d" % [mistakes, LIFE_LIMIT]
-
-	var gold := Color(0.9, 0.75, 0.2) if theme_mgr.dark_mode else Color(0.7, 0.5, 0.0)
-
-	var is_best := false
-	if current_difficulty != "":
-		stats_mgr.init_stats()
-		var prev_best := float(stats_mgr.stats[current_difficulty].get("best_time", -1.0))
-		is_best = prev_best < 0 or elapsed_time < prev_best
-		stats_mgr.record_game_won(current_difficulty, elapsed_time)
-
-	win_best_label.visible = is_best
-	if is_best:
-		win_best_label.text = "New Best Time!"
-		win_best_label.add_theme_color_override("font_color", gold)
-
-	if is_daily_game:
-		var today := _get_today_date_str()
-		var yesterday := _get_yesterday_date_str()
-		stats_mgr.record_daily_won(today, yesterday, elapsed_time)
-		var streak := stats_mgr.get_daily_streak(today, yesterday)
-		win_streak_label.text = "Streak: %d %s" % [streak, "day" if streak == 1 else "days"]
-		win_streak_label.add_theme_color_override("font_color", gold)
-		win_streak_label.visible = true
-		var best_s := stats_mgr.get_daily_best_streak()
-		if streak >= best_s and streak > 1:
-			win_best_streak_label.text = "New Best Streak!"
-			win_best_streak_label.add_theme_color_override("font_color", gold)
-			win_best_streak_label.visible = true
-		else:
-			win_best_streak_label.visible = false
-	else:
-		win_streak_label.visible = false
-		win_best_streak_label.visible = false
-
-	save_mgr.clear()
-	if delay > 0.0:
-		var tween := create_tween()
-		tween.tween_interval(delay)
-		tween.tween_callback(func(): animator.show_win_overlay(win_overlay, win_content))
-	else:
-		animator.show_win_overlay(win_overlay, win_content)
-
-
-# --- Custom Puzzle ---
-
-func _on_create_puzzle_pressed() -> void:
-	difficulty_overlay.visible = false
-	game_container.visible = true
-	is_creating_puzzle = true
-	is_custom_game = true
-	is_daily_game = false
-	current_difficulty = "Custom"
-	difficulty_label.text = "Create Puzzle"
-
-	_reset_game_state()
-	solution_board = solver._create_empty_board()
-	player_board = solver._create_empty_board()
-	initial_board = solver._create_empty_board()
-
-	for r in range(SudokuSolver.SIZE):
-		for c in range(SudokuSolver.SIZE):
-			buttons[r][c].text = ""
-			buttons[r][c].set_meta("is_locked", false)
-			_apply_cell_color(buttons[r][c], "")
-			update_note_display(r, c)
-
-	update_number_pad()
-	_enter_create_mode()
-	save_mgr.request_save()
-
-func _on_create_play_pressed() -> void:
-	var filled := 0
-	for r in range(SudokuSolver.SIZE):
-		for c in range(SudokuSolver.SIZE):
-			if player_board[r][c] != 0:
-				filled += 1
-	if filled == 0:
-		_show_validation_error("Place some numbers first")
-		return
-
-	if _has_board_conflicts():
-		_show_validation_error("Conflicting numbers found")
-		return
-
-	var test := player_board.duplicate(true)
-	var solutions := solver._count_solutions(test)
-	if solutions == 0:
-		_show_validation_error("This puzzle has no solution")
-		return
-	if solutions > 1:
-		_show_validation_error("Multiple solutions found.\nAdd more numbers.")
-		return
-
-	var sol := player_board.duplicate(true)
-	solver._fill_board(sol)
-	solution_board = sol
-	initial_board = player_board.duplicate(true)
-
-	is_creating_puzzle = false
-	_enter_solve_mode()
-	_reset_game_state()
-	player_board = initial_board.duplicate(true)
-	difficulty_label.text = "Custom"
-	stats_mgr.record_game_started("Custom")
-
-	for r in range(SudokuSolver.SIZE):
-		for c in range(SudokuSolver.SIZE):
-			var btn = buttons[r][c]
-			if initial_board[r][c] != 0:
-				btn.text = str(initial_board[r][c])
-				btn.set_meta("is_locked", true)
-				_apply_cell_color(btn, "initial")
-			else:
-				btn.text = ""
-				btn.set_meta("is_locked", false)
-				_apply_cell_color(btn, "")
-			update_note_display(r, c)
-
-	remaining_cells = 0
-	for r in range(SudokuSolver.SIZE):
-		for c in range(SudokuSolver.SIZE):
-			if player_board[r][c] != solution_board[r][c]:
-				remaining_cells += 1
-
-	update_number_pad()
-	save_mgr.request_save()
-
-func _on_create_clear_pressed() -> void:
-	for r in range(SudokuSolver.SIZE):
-		for c in range(SudokuSolver.SIZE):
-			player_board[r][c] = 0
-			buttons[r][c].text = ""
-			_apply_cell_color(buttons[r][c], "")
-	selected_button = null
-	for r in range(SudokuSolver.SIZE):
-		for c in range(SudokuSolver.SIZE):
-			theme_mgr.apply_button_styles(buttons[r][c], theme_mgr.get_cell_style(r, c, &"default"), theme_mgr.get_cell_style(r, c, &"default_pressed"))
-	save_mgr.request_save()
-
-func _enter_create_mode() -> void:
-	timer_label.visible = false
-	mistakes_label.visible = false
-	pause_button.visible = false
-	notes_toggle_btn.visible = false
-	hint_btn.visible = false
-	undo_btn.visible = false
-	auto_notes_btn.visible = false
-	clear_notes_action_btn.visible = false
-	create_clear_btn.visible = true
-	create_play_btn.visible = true
-
-func _enter_solve_mode() -> void:
-	timer_label.visible = true
-	mistakes_label.visible = true
-	pause_button.visible = true
-	notes_toggle_btn.visible = true
-	hint_btn.visible = true
-	undo_btn.visible = true
-	auto_notes_btn.visible = true
-	clear_notes_action_btn.visible = true
-	create_clear_btn.visible = false
-	create_play_btn.visible = false
-
-func _has_board_conflicts() -> bool:
-	for r in range(SudokuSolver.SIZE):
-		var seen := {}
-		for c in range(SudokuSolver.SIZE):
-			var n = player_board[r][c]
-			if n != 0:
-				if seen.has(n):
-					return true
-				seen[n] = true
-	for c in range(SudokuSolver.SIZE):
-		var seen := {}
-		for r in range(SudokuSolver.SIZE):
-			var n = player_board[r][c]
-			if n != 0:
-				if seen.has(n):
-					return true
-				seen[n] = true
-	for box in range(SudokuSolver.SIZE):
-		var seen := {}
-		var br = (box / SudokuSolver.BOX_SIZE) * SudokuSolver.BOX_SIZE
-		var bc = (box % SudokuSolver.BOX_SIZE) * SudokuSolver.BOX_SIZE
-		for r in range(br, br + SudokuSolver.BOX_SIZE):
-			for c in range(bc, bc + SudokuSolver.BOX_SIZE):
-				var n = player_board[r][c]
-				if n != 0:
-					if seen.has(n):
-						return true
-					seen[n] = true
-	return false
-
-func _show_validation_error(msg: String) -> void:
-	validation_error_label.text = msg
-	validation_overlay.visible = true
-
-func _on_validation_back() -> void:
-	validation_overlay.visible = false
-
-func create_validation_overlay() -> void:
-	var result = UIFactory.create_overlay(self)
-	validation_overlay = result[0]
-	var vbox = result[1]
-
-	validation_error_label = UIFactory.create_overlay_label("", 32)
-	vbox.add_child(validation_error_label)
-	vbox.add_child(UIFactory.create_overlay_button("Back", _on_validation_back))
-
-
-# --- Overlays ---
-
-func create_win_overlay() -> void:
-	var result = UIFactory.create_overlay(self)
-	win_overlay = result[0]
-	win_content = result[1]
-
-	win_content.add_child(UIFactory.create_overlay_label("You Won!!"))
-
-	var stats_box := VBoxContainer.new()
-	stats_box.alignment = BoxContainer.ALIGNMENT_CENTER
-	stats_box.add_theme_constant_override("separation", 8)
-
-	win_time_label = UIFactory.create_overlay_label("", 32)
-	stats_box.add_child(win_time_label)
-
-	win_mistakes_label = UIFactory.create_overlay_label("", 32)
-	stats_box.add_child(win_mistakes_label)
-
-	win_best_label = UIFactory.create_overlay_label("", FONT_SIZE_STATS_TITLE)
-	win_best_label.visible = false
-	stats_box.add_child(win_best_label)
-
-	win_streak_label = UIFactory.create_overlay_label("", FONT_SIZE_STATS_TITLE)
-	win_streak_label.visible = false
-	stats_box.add_child(win_streak_label)
-
-	win_best_streak_label = UIFactory.create_overlay_label("", FONT_SIZE_STATS_DETAIL)
-	win_best_streak_label.visible = false
-	stats_box.add_child(win_best_streak_label)
-
-	win_content.add_child(stats_box)
-	win_content.add_child(UIFactory.create_overlay_button("New Game", _go_to_difficulty.bind(win_overlay)))
-
-func create_lose_overlay() -> void:
-	var result = UIFactory.create_overlay(self)
-	lose_overlay = result[0]
-	var vbox = result[1]
-
-	vbox.add_child(UIFactory.create_overlay_label("You Lost"))
-	var ad_life_btn := UIFactory.create_overlay_button("Watch Ad for Life", _on_another_life_pressed)
-	ad_life_btn.name = "AdLifeButton"
-	vbox.add_child(ad_life_btn)
-	vbox.add_child(UIFactory.create_overlay_button("New Game", _go_to_difficulty.bind(lose_overlay)))
-
-func create_pause_overlay() -> void:
-	var result = UIFactory.create_overlay(self)
-	pause_overlay = result[0]
-	var vbox = result[1]
-
-	vbox.add_child(UIFactory.create_overlay_label("Paused"))
-	vbox.add_child(UIFactory.create_overlay_button("Resume", _on_resume_pressed))
-	vbox.add_child(UIFactory.create_overlay_button("Restart", _on_restart_pressed))
-	vbox.add_child(UIFactory.create_overlay_button("New Game", _go_to_difficulty.bind(pause_overlay)))
-
-func create_settings_overlay() -> void:
-	var result = UIFactory.create_overlay(self, Color(0, 0, 0, 1.0))
-	settings_overlay = result[0]
-	var vbox = result[1]
-
-	settings_overlay.add_child(UIFactory.create_close_button(_on_settings_close_pressed))
-
-	vbox.add_child(UIFactory.create_overlay_label("Settings"))
-
-	var theme_row := HBoxContainer.new()
-	theme_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	theme_row.add_theme_constant_override("separation", 20)
-
-	var theme_label := Label.new()
-	theme_label.text = "Dark Mode"
-	theme_label.add_theme_font_size_override("font_size", FONT_SIZE_SETTINGS_LABEL)
-	theme_label.add_theme_color_override("font_color", Color.WHITE)
-	theme_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	theme_row.add_child(theme_label)
-
-	var toggle_container := Control.new()
-	toggle_container.custom_minimum_size = Vector2(TOGGLE_TRACK_W, TOGGLE_TRACK_H)
-	toggle_container.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-
-	var track_style := StyleBoxFlat.new()
-	track_style.corner_radius_top_left = CORNER_RADIUS_TOGGLE
-	track_style.corner_radius_top_right = CORNER_RADIUS_TOGGLE
-	track_style.corner_radius_bottom_left = CORNER_RADIUS_TOGGLE
-	track_style.corner_radius_bottom_right = CORNER_RADIUS_TOGGLE
-
-	theme_toggle_track = Panel.new()
-	theme_toggle_track.size = Vector2(TOGGLE_TRACK_W, TOGGLE_TRACK_H)
-	theme_toggle_track.add_theme_stylebox_override("panel", track_style)
-	toggle_container.add_child(theme_toggle_track)
-
-	var knob_style := StyleBoxFlat.new()
-	knob_style.bg_color = Color.WHITE
-	knob_style.corner_radius_top_left = 15
-	knob_style.corner_radius_top_right = 15
-	knob_style.corner_radius_bottom_left = 15
-	knob_style.corner_radius_bottom_right = 15
-
-	theme_toggle_knob = Panel.new()
-	theme_toggle_knob.size = Vector2(TOGGLE_KNOB_SIZE, TOGGLE_KNOB_SIZE)
-	theme_toggle_knob.add_theme_stylebox_override("panel", knob_style)
-	theme_toggle_knob.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	toggle_container.add_child(theme_toggle_knob)
-
-	_update_toggle_visual()
-
-	var toggle_btn := Button.new()
-	toggle_btn.set_anchors_preset(Control.PRESET_FULL_RECT)
-	toggle_btn.focus_mode = Control.FOCUS_NONE
-	toggle_btn.flat = true
-	toggle_btn.mouse_filter = Control.MOUSE_FILTER_STOP
-	toggle_btn.pressed.connect(_on_theme_toggle_pressed)
-	toggle_container.add_child(toggle_btn)
-
-	theme_row.add_child(toggle_container)
-	vbox.add_child(theme_row)
-	vbox.add_child(UIFactory.create_overlay_button("Statistics", _on_statistics_pressed))
-
-func create_stats_overlay() -> void:
-	var result = UIFactory.create_overlay(self, Color(0, 0, 0, 1.0), 20)
-	stats_overlay = result[0]
-	var vbox = result[1]
-
-	stats_overlay.add_child(UIFactory.create_close_button(_on_stats_back_pressed))
-
-	vbox.add_child(UIFactory.create_overlay_label("Statistics", 48))
-
-	stats_container = VBoxContainer.new()
-	stats_container.add_theme_constant_override("separation", 12)
-	vbox.add_child(stats_container)
-
-	vbox.add_child(UIFactory.create_overlay_button("Back", _on_stats_back_pressed))
-
-func _update_stats_display() -> void:
-	for child in stats_container.get_children():
-		child.queue_free()
-
-	stats_mgr.init_stats()
-
-	var today := _get_today_date_str()
-	var yesterday := _get_yesterday_date_str()
-	var daily_section := VBoxContainer.new()
-	daily_section.add_theme_constant_override("separation", 2)
-
-	var daily_title := Label.new()
-	daily_title.text = "Daily"
-	daily_title.add_theme_font_size_override("font_size", FONT_SIZE_STATS_TITLE)
-	var warm := Color(0.9, 0.75, 0.2) if theme_mgr.dark_mode else Color(0.6, 0.4, 0.0)
-	daily_title.add_theme_color_override("font_color", warm)
-	daily_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	daily_section.add_child(daily_title)
-
-	var streak := stats_mgr.get_daily_streak(today, yesterday)
-	var best_streak := stats_mgr.get_daily_best_streak()
-	var daily_best_time := stats_mgr.get_daily_best_time()
-
-	var daily_detail := Label.new()
-	daily_detail.text = "Streak: %d   Record: %d   Best: %s" % [streak, best_streak, stats_mgr.format_best_time(daily_best_time)]
-	daily_detail.add_theme_font_size_override("font_size", FONT_SIZE_STATS_DETAIL)
-	daily_detail.add_theme_color_override("font_color", theme_mgr.color_overlay_label)
-	daily_detail.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	daily_section.add_child(daily_detail)
-
-	stats_container.add_child(daily_section)
-
-	for diff_name in DIFFICULTIES.keys() + ["Custom"]:
-		var entry : Dictionary = stats_mgr.stats[diff_name]
-		var started := int(entry.get("started", 0))
-		var won := int(entry.get("won", 0))
-		var best := float(entry.get("best_time", -1.0))
-
-		if diff_name == "Custom" and started == 0 and won == 0:
-			continue
-
-		var section := VBoxContainer.new()
-		section.add_theme_constant_override("separation", 2)
-
-		var title := Label.new()
-		title.text = diff_name
-		title.add_theme_font_size_override("font_size", FONT_SIZE_STATS_TITLE)
-		title.add_theme_color_override("font_color", Color(0.9, 0.75, 0.2) if theme_mgr.dark_mode else Color(0.6, 0.4, 0.0))
-		title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		section.add_child(title)
-
-		var detail := Label.new()
-		detail.text = "Played: %d   Won: %d   Best: %s" % [started, won, stats_mgr.format_best_time(best)]
-		detail.add_theme_font_size_override("font_size", FONT_SIZE_STATS_DETAIL)
-		detail.add_theme_color_override("font_color", theme_mgr.color_overlay_label)
-		detail.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		section.add_child(detail)
-
-		stats_container.add_child(section)
-
-func create_difficulty_overlay() -> void:
-	var result = UIFactory.create_overlay(self, Color(0, 0, 0, 1.0), 24)
-	difficulty_overlay = result[0]
-	var vbox = result[1]
-
-	vbox.add_child(UIFactory.create_overlay_label("Select Difficulty", 52))
-
-	var spacer := Control.new()
-	spacer.custom_minimum_size = Vector2(0, 16)
-	vbox.add_child(spacer)
-
-	continue_btn = UIFactory.create_overlay_button("Continue", _on_continue_pressed)
-	continue_btn.custom_minimum_size = Vector2(340, 72)
-	continue_btn.add_theme_font_size_override("font_size", 32)
-	continue_btn.visible = false
-	vbox.add_child(continue_btn)
-
-	var daily_section := VBoxContainer.new()
-	daily_section.alignment = BoxContainer.ALIGNMENT_CENTER
-	daily_section.add_theme_constant_override("separation", 8)
-
-	daily_btn = UIFactory.create_overlay_button("Daily Puzzle", _on_daily_pressed)
-	daily_btn.custom_minimum_size = Vector2(340, 72)
-	daily_btn.add_theme_font_size_override("font_size", 32)
-	daily_section.add_child(daily_btn)
-
-	daily_streak_label = Label.new()
-	daily_streak_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	daily_streak_label.add_theme_font_size_override("font_size", FONT_SIZE_STATS_DETAIL)
-	daily_section.add_child(daily_streak_label)
-
-	vbox.add_child(daily_section)
-
-	for diff_name in DIFFICULTIES:
-		var btn = UIFactory.create_overlay_button(diff_name, _on_difficulty_selected.bind(diff_name, DIFFICULTIES[diff_name]))
-		btn.custom_minimum_size = Vector2(340, 72)
-		btn.add_theme_font_size_override("font_size", 32)
-		vbox.add_child(btn)
-
-	var create_spacer := Control.new()
-	create_spacer.custom_minimum_size = Vector2(0, 8)
-	vbox.add_child(create_spacer)
-
-	var create_btn = UIFactory.create_overlay_button("Create Your Own", _on_create_puzzle_pressed)
-	create_btn.custom_minimum_size = Vector2(340, 72)
-	create_btn.add_theme_font_size_override("font_size", 32)
-	vbox.add_child(create_btn)
-
-func _on_continue_pressed() -> void:
-	if _load_game():
-		difficulty_overlay.visible = false
-		game_container.visible = true
-
-func _update_continue_button() -> void:
-	if not save_mgr.has_save():
-		continue_btn.visible = false
-		return
-	var data = save_mgr.load_data()
-	if data != null and data.get("is_daily", false):
-		if data.get("daily_date", "") != _get_today_date_str():
-			save_mgr.clear()
-			continue_btn.visible = false
-			return
-	continue_btn.visible = true
-
-func _on_another_life_pressed() -> void:
-	AdManager.show_rewarded_ad(_grant_extra_life)
-
-func _grant_extra_life() -> void:
-	lose_overlay.visible = false
-	mistakes = LIFE_LIMIT - 1
-	mistakes_label.text = "Mistakes: %d/%d" % [mistakes, LIFE_LIMIT]
-	timer_running = true
-	save_mgr.request_save()
-
-func _on_theme_toggle_pressed() -> void:
-	theme_mgr.set_dark_mode(!theme_mgr.dark_mode)
-	_update_toggle_visual()
-	_apply_theme()
-	stats_mgr.set_dark_mode(theme_mgr.dark_mode)
-	stats_mgr.save_stats()
-
-func _update_toggle_visual() -> void:
-	var track_style : StyleBoxFlat = theme_toggle_track.get_theme_stylebox("panel")
-	if theme_mgr.dark_mode:
-		track_style.bg_color = Color(0.3, 0.7, 0.4)
-		theme_toggle_knob.position = Vector2(TOGGLE_TRACK_W - TOGGLE_KNOB_SIZE - TOGGLE_KNOB_MARGIN, TOGGLE_KNOB_MARGIN)
-	else:
-		track_style.bg_color = Color(0.5, 0.5, 0.5)
-		theme_toggle_knob.position = Vector2(TOGGLE_KNOB_MARGIN, TOGGLE_KNOB_MARGIN)
-
-func _on_settings_pressed() -> void:
-	timer_running = false
-	settings_button.visible = false
-	settings_overlay.visible = true
-
-func _on_settings_close_pressed() -> void:
-	settings_overlay.visible = false
-	settings_button.visible = true
-	if timer_started:
-		timer_running = true
-
-func _on_statistics_pressed() -> void:
-	settings_overlay.visible = false
-	_update_stats_display()
-	stats_overlay.visible = true
-
-func _on_stats_back_pressed() -> void:
-	stats_overlay.visible = false
-	settings_overlay.visible = true
-
-func _on_pause_pressed() -> void:
-	timer_running = false
-	pause_overlay.visible = true
-	save_mgr.save_immediate()
-
-func _on_resume_pressed() -> void:
-	pause_overlay.visible = false
-	timer_running = true
-
-func _on_restart_pressed() -> void:
-	pause_overlay.visible = false
-	player_board = initial_board.duplicate(true)
-	_reset_game_state()
-	update_ui()
-	refresh_board_styles()
-	save_mgr.request_save()
-
-func _on_difficulty_selected(diff_name: String, remove_count: int) -> void:
-	difficulty_overlay.visible = false
-	game_container.visible = true
-	difficulty_label.text = "Level: " + diff_name
-	current_difficulty = diff_name
-	is_daily_game = false
-	is_custom_game = false
-	is_creating_puzzle = false
-	_enter_solve_mode()
-
-	_reset_game_state()
-	stats_mgr.record_game_started(diff_name)
-	var result = solver.generate_puzzle(remove_count)
-	solution_board = result[0]
-	player_board = result[1]
-	initial_board = player_board.duplicate(true)
-	update_ui()
-	refresh_board_styles()
-	save_mgr.request_save()
-
-func _on_daily_pressed() -> void:
-	var info := _get_daily_info()
-	difficulty_overlay.visible = false
-	game_container.visible = true
-	is_daily_game = true
-	is_custom_game = false
-	is_creating_puzzle = false
-	current_difficulty = ""
-	_enter_solve_mode()
-	difficulty_label.text = "Daily - " + info.difficulty
-
-	_reset_game_state()
-	var result = solver.generate_daily_puzzle(info.seed, info.remove_count)
-	solution_board = result[0]
-	player_board = result[1]
-	initial_board = player_board.duplicate(true)
-	update_ui()
-	refresh_board_styles()
-	save_mgr.request_save()
-
-func _update_daily_button() -> void:
-	var today := _get_today_date_str()
-	var yesterday := _get_yesterday_date_str()
-	var completed := stats_mgr.is_daily_completed(today)
-
-	if completed:
-		daily_btn.text = "Daily Complete ✓"
-		daily_btn.disabled = true
-	else:
-		daily_btn.text = "Daily Puzzle"
-		daily_btn.disabled = false
-
-	var streak := stats_mgr.get_daily_streak(today, yesterday)
-	var warm := Color(0.9, 0.75, 0.2) if theme_mgr.dark_mode else Color(0.6, 0.4, 0.0)
-	daily_streak_label.add_theme_color_override("font_color", warm)
-	if streak > 0:
-		daily_streak_label.text = "%d day streak" % streak
-	else:
-		daily_streak_label.text = "Start your streak!"
 
 
 # --- Update UI ---
@@ -1650,8 +583,8 @@ func update_ui() -> void:
 				remaining_cells += 1
 
 			if note_labels.size() > 0:
-				update_note_display(r, c)
-	update_number_pad()
+				actions.update_note_display(r, c)
+	actions.update_number_pad()
 
 func format_time(seconds: float) -> String:
 	var mins := int(seconds) / 60
