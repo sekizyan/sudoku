@@ -4,6 +4,15 @@ extends RefCounted
 const SIZE := 9
 const BOX_SIZE := 3
 
+var _rng: RandomNumberGenerator = null
+
+func generate_daily_puzzle(date_seed: int, cells_to_remove: int) -> Array:
+	_rng = RandomNumberGenerator.new()
+	_rng.seed = date_seed
+	var result := generate_puzzle(cells_to_remove)
+	_rng = null
+	return result
+
 func generate_puzzle(cells_to_remove: int) -> Array:
 	var solution := _create_empty_board()
 	_fill_board(solution)
@@ -13,7 +22,7 @@ func generate_puzzle(cells_to_remove: int) -> Array:
 	for r in range(SIZE):
 		for c in range(SIZE):
 			cells.append(Vector2i(r, c))
-	cells.shuffle()
+	_shuffle_array(cells)
 
 	var removed := 0
 	for cell in cells:
@@ -90,7 +99,7 @@ func _fill_recursive(b: Array, row_used: Array, col_used: Array, box_used: Array
 	var best_c := cell.y
 	var bi = (best_r / BOX_SIZE) * BOX_SIZE + best_c / BOX_SIZE
 	var nums = range(1, 10)
-	nums.shuffle()
+	_shuffle_array(nums)
 	for n in nums:
 		if not row_used[best_r].has(n) and not col_used[best_c].has(n) and not box_used[bi].has(n):
 			b[best_r][best_c] = n
@@ -133,3 +142,13 @@ func _count_recursive(b: Array, row_used: Array, col_used: Array, box_used: Arra
 			if count >= limit:
 				return count
 	return count
+
+func _shuffle_array(arr: Array) -> void:
+	if _rng == null:
+		arr.shuffle()
+		return
+	for i in range(arr.size() - 1, 0, -1):
+		var j := _rng.randi_range(0, i)
+		var tmp = arr[i]
+		arr[i] = arr[j]
+		arr[j] = tmp
