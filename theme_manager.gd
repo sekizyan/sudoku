@@ -34,6 +34,9 @@ var color_overlay_btn_bg : Color
 var color_overlay_btn_text : Color
 var color_overlay_btn_pressed : Color
 var color_overlay_label : Color
+var color_tutorial_focus : Color
+var color_tutorial_related : Color
+var color_tutorial_eliminated : Color
 
 func set_dark_mode(value: bool) -> void:
 	dark_mode = value
@@ -66,6 +69,9 @@ func update_colors() -> void:
 		color_overlay_btn_text = Color(0.1, 0.1, 0.14)
 		color_overlay_btn_pressed = Color(0.78, 0.8, 0.84)
 		color_overlay_label = Color(0.88, 0.9, 0.92)
+		color_tutorial_focus = Color(0.2, 0.45, 0.35)
+		color_tutorial_related = Color(0.2, 0.25, 0.35)
+		color_tutorial_eliminated = Color(0.4, 0.2, 0.2)
 	else:
 		color_bg = Color(0.94, 0.95, 0.97)
 		color_selected = Color(0.8, 0.9, 0.98)
@@ -91,6 +97,9 @@ func update_colors() -> void:
 		color_overlay_btn_text = Color(0.95, 0.96, 0.98)
 		color_overlay_btn_pressed = Color(0.32, 0.34, 0.4)
 		color_overlay_label = Color(0.18, 0.2, 0.25)
+		color_tutorial_focus = Color(0.72, 0.92, 0.78)
+		color_tutorial_related = Color(0.85, 0.9, 0.97)
+		color_tutorial_eliminated = Color(0.95, 0.85, 0.85)
 
 func apply_button_styles(btn: Button, normal: StyleBox, pressed: StyleBox = null) -> void:
 	btn.add_theme_stylebox_override("normal", normal)

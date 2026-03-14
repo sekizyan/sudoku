@@ -21,6 +21,7 @@ var win_streak_label : Label
 var win_best_streak_label : Label
 var lose_overlay : ColorRect
 var pause_overlay : ColorRect
+var create_mode_pause_overlay : ColorRect
 var settings_overlay : ColorRect
 var stats_overlay : ColorRect
 var stats_container : VBoxContainer
@@ -40,6 +41,7 @@ func create_all() -> void:
 	create_win_overlay()
 	create_lose_overlay()
 	create_pause_overlay()
+	_create_create_mode_pause_overlay()
 	create_difficulty_overlay()
 	create_settings_overlay()
 	create_stats_overlay()
@@ -49,11 +51,12 @@ func apply_theme() -> void:
 	win_overlay.color = g.theme_mgr.color_overlay
 	lose_overlay.color = g.theme_mgr.color_overlay
 	pause_overlay.color = g.theme_mgr.color_overlay
+	create_mode_pause_overlay.color = g.theme_mgr.color_overlay
 	settings_overlay.color = g.theme_mgr.color_overlay_solid
 	stats_overlay.color = g.theme_mgr.color_overlay_solid
 	difficulty_overlay.color = g.theme_mgr.color_overlay_solid
 
-	for overlay in [win_overlay, lose_overlay, pause_overlay, settings_overlay, stats_overlay, difficulty_overlay, validation_overlay]:
+	for overlay in [win_overlay, lose_overlay, pause_overlay, create_mode_pause_overlay, settings_overlay, stats_overlay, difficulty_overlay, validation_overlay]:
 		g.theme_mgr.theme_overlay_children(overlay)
 
 	validation_overlay.color = g.theme_mgr.color_overlay
@@ -113,7 +116,17 @@ func create_pause_overlay() -> void:
 	vbox.add_child(UIFactory.create_overlay_label("Paused"))
 	vbox.add_child(UIFactory.create_overlay_button("Resume", _on_resume_pressed))
 	vbox.add_child(UIFactory.create_overlay_button("Restart", _on_restart_pressed))
+	vbox.add_child(UIFactory.create_overlay_button("Main Menu", _on_main_menu_pressed))
 	vbox.add_child(UIFactory.create_overlay_button("New Game", _go_to_difficulty.bind(pause_overlay)))
+
+func _create_create_mode_pause_overlay() -> void:
+	var result = UIFactory.create_overlay(g)
+	create_mode_pause_overlay = result[0]
+	var vbox = result[1]
+
+	vbox.add_child(UIFactory.create_overlay_label("Paused"))
+	vbox.add_child(UIFactory.create_overlay_button("Resume", _on_create_resume_pressed))
+	vbox.add_child(UIFactory.create_overlay_button("Main Menu", _on_create_main_menu_pressed))
 
 func create_settings_overlay() -> void:
 	var result = UIFactory.create_overlay(g, Color(0, 0, 0, 1.0))
@@ -240,6 +253,11 @@ func create_difficulty_overlay() -> void:
 	create_btn.add_theme_font_size_override("font_size", 32)
 	vbox.add_child(create_btn)
 
+	var learn_btn = UIFactory.create_overlay_button("Learn", _on_learn_pressed)
+	learn_btn.custom_minimum_size = Vector2(340, 72)
+	learn_btn.add_theme_font_size_override("font_size", 32)
+	vbox.add_child(learn_btn)
+
 func create_validation_overlay() -> void:
 	var result = UIFactory.create_overlay(g)
 	validation_overlay = result[0]
@@ -265,12 +283,28 @@ func _go_to_difficulty(overlay: ColorRect) -> void:
 
 func on_pause_pressed() -> void:
 	g.timer_running = false
-	pause_overlay.visible = true
-	g.save_mgr.save_immediate()
+	if g.custom.is_creating_puzzle:
+		create_mode_pause_overlay.visible = true
+	else:
+		pause_overlay.visible = true
+		g.save_mgr.save_immediate()
 
 func _on_resume_pressed() -> void:
 	pause_overlay.visible = false
 	g.timer_running = true
+
+func _on_create_resume_pressed() -> void:
+	create_mode_pause_overlay.visible = false
+
+func _on_create_main_menu_pressed() -> void:
+	create_mode_pause_overlay.visible = false
+	g.custom.is_creating_puzzle = false
+	g.custom.is_custom_game = false
+	g.custom.enter_solve_mode()
+	g.game_container.visible = false
+	difficulty_overlay.visible = true
+	update_continue_button()
+	update_daily_button()
 
 func _on_restart_pressed() -> void:
 	pause_overlay.visible = false
@@ -279,6 +313,15 @@ func _on_restart_pressed() -> void:
 	g.update_ui()
 	g.refresh_board_styles()
 	g.save_mgr.request_save()
+
+func _on_main_menu_pressed() -> void:
+	pause_overlay.visible = false
+	g.timer_running = false
+	g.save_mgr.save_immediate()
+	g.game_container.visible = false
+	difficulty_overlay.visible = true
+	update_continue_button()
+	update_daily_button()
 
 func on_settings_pressed() -> void:
 	g.timer_running = false
@@ -466,6 +509,11 @@ func update_daily_button() -> void:
 func show_validation_error(msg: String) -> void:
 	validation_error_label.text = msg
 	validation_overlay.visible = true
+
+func _on_learn_pressed() -> void:
+	difficulty_overlay.visible = false
+	g.settings_button.visible = false
+	g.tutorial_mgr.tutorial_overlay.visible = true
 
 func _on_validation_back() -> void:
 	validation_overlay.visible = false

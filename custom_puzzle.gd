@@ -32,7 +32,6 @@ func on_create_puzzle_pressed() -> void:
 
 	g.actions.update_number_pad()
 	enter_create_mode()
-	g.save_mgr.request_save()
 
 func on_create_play_pressed() -> void:
 	var filled := 0
@@ -101,12 +100,11 @@ func on_create_clear_pressed() -> void:
 	for r in range(SudokuSolver.SIZE):
 		for c in range(SudokuSolver.SIZE):
 			g.theme_mgr.apply_button_styles(g.buttons[r][c], g.theme_mgr.get_cell_style(r, c, &"default"), g.theme_mgr.get_cell_style(r, c, &"default_pressed"))
-	g.save_mgr.request_save()
 
 func enter_create_mode() -> void:
 	g.timer_label.visible = false
 	g.mistakes_label.visible = false
-	g.pause_button.visible = false
+	g.pause_button.visible = true
 	g.notes_toggle_btn.visible = false
 	g.hint_btn.visible = false
 	g.undo_btn.visible = false
