@@ -261,7 +261,6 @@ func on_delete_pressed() -> void:
 			g.selected_button.text = ""
 			g._apply_cell_color(g.selected_button, "")
 			g.refresh_board_styles()
-			g.save_mgr.request_save()
 		return
 	if g.selected_button.get_meta("is_locked", false):
 		return
@@ -303,6 +302,9 @@ func on_delete_pressed() -> void:
 func on_number_pressed(number: int) -> void:
 	if g.selected_button == null:
 		return
+	if g.tutorial_mgr.is_active:
+		g.tutorial_mgr.on_number_pressed(number)
+		return
 	if g.custom.is_creating_puzzle:
 		var r = g.selected_button.get_meta("row")
 		var c = g.selected_button.get_meta("col")
@@ -315,7 +317,6 @@ func on_number_pressed(number: int) -> void:
 			g.selected_button.text = str(number)
 			g._apply_cell_color(g.selected_button, "initial")
 		g.refresh_board_styles()
-		g.save_mgr.request_save()
 		return
 	if g.selected_button.get_meta("is_locked", false):
 		return

@@ -26,6 +26,7 @@ var animator := BoardAnimator.new()
 var actions := GameActions.new()
 var custom := CustomPuzzle.new()
 var overlay_mgr := OverlayManager.new()
+var tutorial_mgr := TutorialManager.new()
 
 var solver := SudokuSolver.new()
 var solution_board: Array = []
@@ -66,6 +67,8 @@ var is_daily_game := false
 @onready var board = $MarginContainer/VBoxContainer/Board
 @onready var number_pad = $MarginContainer/VBoxContainer/NumberPad
 @onready var action_buttons = $MarginContainer/VBoxContainer/ActionButtons
+@onready var board_pad_spacer = $MarginContainer/VBoxContainer/BoardPadSpacer
+@onready var pad_action_spacer = $MarginContainer/VBoxContainer/PadActionSpacer
 
 
 func _ready() -> void:
@@ -80,6 +83,7 @@ func _ready() -> void:
 	actions.setup(self)
 	custom.setup(self)
 	overlay_mgr.setup(self)
+	tutorial_mgr.setup(self)
 
 	bg_rect = ColorRect.new()
 	bg_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -90,6 +94,7 @@ func _ready() -> void:
 	create_board_ui()
 	create_number_pad()
 	overlay_mgr.create_all()
+	tutorial_mgr.create_all()
 
 	UIFactory.apply_pause_button_style(pause_button)
 	pause_button.pressed.connect(overlay_mgr.on_pause_pressed)
@@ -118,6 +123,8 @@ func _ready() -> void:
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_WM_CLOSE_REQUEST:
+		if tutorial_mgr.is_active or custom.is_creating_puzzle:
+			return
 		if game_container.visible and not overlay_mgr.win_overlay.visible and not overlay_mgr.lose_overlay.visible:
 			save_mgr.save_immediate()
 
@@ -165,6 +172,7 @@ func _apply_theme() -> void:
 
 	actions.apply_theme()
 	overlay_mgr.apply_theme()
+	tutorial_mgr.apply_theme()
 
 
 # --- Helpers ---
@@ -478,6 +486,9 @@ func create_board_ui() -> void:
 			note_labels[r].append({"grid": note_grid, "labels": cell_labels})
 
 func _on_cell_pressed(btn: Button) -> void:
+	if tutorial_mgr.is_active:
+		tutorial_mgr.on_cell_pressed(btn)
+		return
 	selected_button = btn
 	refresh_board_styles()
 
